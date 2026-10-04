@@ -37,6 +37,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const TMUX = ["-L", process.env.HUB_SOCKET ?? "hub", "-f", path.join(HERE, "tmux.conf")];
 const CONFIG_DIR = process.env.HUB_CONFIG_DIR ?? path.join(process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config"), "hub");
 const PROJECTS_FILE = path.join(CONFIG_DIR, "projects.json");
+const ORDER_FILE = path.join(CONFIG_DIR, "order.json");
 const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
 const STATES = ["idle", "working", "waiting", "done", "off"];
 const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/", worktree: null };
@@ -80,6 +81,21 @@ function addProject(root) {
   projects.push(root);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2));
+}
+
+// project root → its sessions in the order the sidebar shows them (set by dragging rows)
+const order = (() => {
+  try {
+    return JSON.parse(readFileSync(ORDER_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+})();
+
+function setOrder(root, sessions) {
+  order[root] = sessions;
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(ORDER_FILE, JSON.stringify(order, null, 2));
 }
 
 function config(root) {
@@ -156,7 +172,7 @@ function worktrees(root) {
   const cfg = config(root);
   const out = execFileSync("git", ["-C", root, "worktree", "list", "--porcelain"], { encoding: "utf8" });
   const live = liveSessions();
-  return out.trim().split("\n\n").map((block) => {
+  const list = out.trim().split("\n\n").map((block, index) => {
     const dir = block.match(/^worktree (.+)$/m)[1];
     const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? "(detached)";
     const portFile = cfg.port?.file && path.join(dir, cfg.port.file);
@@ -165,12 +181,16 @@ function worktrees(root) {
     const alive = live.has(session);
     const running = live.get(session) === binOf(cfg.agent);
     return {
-      session, dir, branch, port, main: dir === root, alive,
+      session, dir, branch, port, index, main: dir === root, alive,
       url: port && cfg.url.replace("{port}", port),
       state: (alive && (status.get(session) ?? (running && "unknown"))) || "off",
       agent: cfg.agent, devCommand: cfg.dev,
     };
   });
+  // the saved order first; worktrees it does not know (new ones) follow in git's order
+  const saved = order[root] ?? [];
+  const rank = (w) => (saved.includes(w.session) ? saved.indexOf(w.session) : saved.length);
+  return list.sort((a, b) => rank(a) - rank(b));
 }
 
 const allWorktrees = () => projects.flatMap(worktrees);
@@ -246,6 +266,14 @@ async function handle(req, url, send) {
     } catch (e) {
       return send(400, "text/plain", (e.stderr || e.message).trim());
     }
+  }
+  if (req.method === "POST" && url.pathname === "/api/order") {
+    const q = await body(req);
+    const root = projects.find((r) => nameOf(r) === q.get("p"));
+    if (!root) return send(400, "text/plain", "unknown project");
+    const known = new Set(worktrees(root).map((w) => w.session));
+    setOrder(root, [...new Set(q.getAll("s"))].filter((s) => known.has(s)));
+    return send(200, "text/plain", "ok");
   }
   if (req.method === "POST" && url.pathname === "/api/stop") {
     send(200, "text/plain", "stopping");

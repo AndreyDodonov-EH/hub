@@ -35,7 +35,9 @@ one project (`?p=<name>`); the links at the top of the sidebar switch (ctrl/midd
 opens a project in its own tab), and a badge on another project counts its chats that
 are waiting or done.
 
-- **Row colour**: one of four, keyed to the port (or the row order without one).
+- **Row colour**: one of four, keyed to the port (or git's worktree order without one).
+- **Row order**: drag a row to move it. The order is kept per project in
+  `~/.config/hub/order.json`; new worktrees go to the end.
 - **Status**: idle / working / needs you / done, with browser notifications for the
   last two on chats you are not looking at. Claude Code reports all of them through
   hooks the hub injects at launch (`claude --settings`); other agents only show
@@ -82,7 +84,7 @@ Without `port`, rows have no link and no dev server.
 | --- | --- | --- |
 | `HUB_PORT` | `5190` | port of the hub page |
 | `HUB_SOCKET` | `hub` | tmux server socket name |
-| `HUB_CONFIG_DIR` | `~/.config/hub` | where the project list lives |
+| `HUB_CONFIG_DIR` | `~/.config/hub` | where the project list and row order live |
 | `HUB_CMD` | — | overrides `agent` for new sessions; empty = bare shell |
 
 ## Security
