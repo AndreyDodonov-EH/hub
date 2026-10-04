@@ -67,7 +67,7 @@ const params = new URLSearchParams(location.search);
 let project = params.get("p");
 let selected = params.get("s");
 const query = () => `?p=${encodeURIComponent(project)}${selected ? `&s=${encodeURIComponent(selected)}` : ""}`;
-const terms = new Map(); // session → { term, fit, ws, el }, kept attached so switching is instant
+const terms = new Map(); // session → { term, fit, ws, el, … }, kept attached so switching is instant
 const current = () => terms.get(selected);
 
 function attach(session) {
@@ -93,15 +93,40 @@ function attach(session) {
   });
   term.open(el);
   fit.fit();
-  const ws = new WebSocket(`ws://${location.host}/pty?s=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`);
-  const send = (m) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
-  ws.onmessage = (e) => term.write(e.data);
-  ws.onclose = () => term.write("\r\n\x1b[2m[detached — click the row to reattach]\x1b[0m\r\n");
+  const send = (m) => { if (t.ws.readyState === WebSocket.OPEN) t.ws.send(JSON.stringify(m)); };
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", cols, rows }));
-  const t = { term, fit, ws, el, send };
+  // a detached terminal reattaches on a click, unless that click ended a text selection
+  el.addEventListener("click", () => t.over && !term.hasSelection() && open(session));
+  const t = { session, term, fit, el, send };
   terms.set(session, t);
+  connect(t);
   return t;
+}
+
+const dim = (text) => `\r\n\x1b[2m[${text}]\x1b[0m\r\n`;
+
+function connect(t) {
+  const { session, term } = t;
+  // coming back from a drop only reattaches (`again`): it never starts a session
+  t.ws = new WebSocket(`ws://${location.host}/pty?s=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}${t.lost ? "&again" : ""}`);
+  t.ws.onopen = () => {
+    if (t.lost) term.reset(); // tmux draws the screen again
+    t.lost = false;
+  };
+  t.ws.onmessage = (e) => term.write(e.data);
+  t.ws.onclose = (e) => {
+    if (terms.get(session) !== t) return; // started over meanwhile
+    // closed by the hub: the session ended, or tmux detached this client
+    if (e.wasClean) {
+      t.over = true;
+      return term.write(dim("detached — click to reattach"));
+    }
+    // dropped (the hub restarted, the machine slept): keep trying until it answers
+    if (!t.lost) term.write(dim("connection lost — reconnecting…"));
+    t.lost = true;
+    setTimeout(() => terms.get(session) === t && connect(t), 1000);
+  };
 }
 
 function open(session) {
@@ -109,7 +134,7 @@ function open(session) {
   history.replaceState(null, "", query());
   document.getElementById("empty").hidden = true;
   let t = terms.get(session);
-  if (t && t.ws.readyState > WebSocket.OPEN) { // detached: start over
+  if (t?.over) { // detached: start over
     t.term.dispose();
     t.el.remove();
     t = null;

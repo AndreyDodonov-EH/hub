@@ -62,6 +62,9 @@ are waiting or done.
   command (`worktree` below). The new row opens right away.
 - **Port link**: lit when something answers on the worktree's port. Clicking a dimmed
   one starts the project's dev command in a second tmux window.
+- **Reconnect**: a terminal that loses the hub (a restart, the machine asleep) reattaches
+  by itself once the hub answers. One whose session ended stays detached until you click
+  it or its row, which starts a new session.
 - **Clipboard**: a plain drag copies on release; shift+drag then right-click copies
   too; Ctrl+V pastes.
 - **From a terminal**: `tmux -L hub attach -t <session>`.

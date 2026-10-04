@@ -425,6 +425,8 @@ wss.on("connection", async (ws, req) => {
   if (!wt) return ws.close(4004, "unknown session");
 
   if (!wt.alive) {
+    // a page coming back from a dropped connection reattaches; a new session takes a click
+    if (q.has("again")) return ws.close(4000, "session ended");
     tmux("new-session", "-d", "-s", wt.session, "-c", wt.dir);
     // typed into a shell, so the session outlives the agent exiting
     const cmd = launchCommand(wt);
