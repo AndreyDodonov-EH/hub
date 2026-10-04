@@ -157,18 +157,35 @@ function launchCommand({ agent, dir }) {
 // turn may have ended while nobody was listening.
 const STATUS_FILE = path.join(tmpdir(), `hub-${PORT}-status.json`);
 const status = new Map();
+// session → what its pane was running when the state came in: the state is that
+// agent's, and goes when the agent does. None for a report from outside the hub's tmux.
+const owner = new Map();
+// sessions whose Codex reports through hooks, which then speak for it instead of the
+// daemon. Not kept across a restart: the next hook says so again.
+const hooked = new Set();
 try {
-  for (const [session, state] of Object.entries(JSON.parse(readFileSync(STATUS_FILE, "utf8")))) {
-    if (STATES.includes(state) && state !== "working") status.set(session, state);
+  for (const [session, entry] of Object.entries(JSON.parse(readFileSync(STATUS_FILE, "utf8")))) {
+    const { state, agent } = typeof entry === "string" ? { state: entry } : entry; // a string: written by an older hub
+    if (!STATES.includes(state) || state === "working") continue;
+    status.set(session, state);
+    if (agent) owner.set(session, agent);
   }
 } catch {
   // first run
 }
-function setStatus(session, state) {
-  if (status.get(session) === state) return;
-  if (state === "off") status.delete(session);
-  else status.set(session, state);
-  writeFileSync(STATUS_FILE, JSON.stringify(Object.fromEntries(status)));
+// `agent`: the pane command the state belongs to (null: none); left out, it stays as it is
+function setStatus(session, state, agent = owner.get(session) ?? null) {
+  if (state === "off") {
+    hooked.delete(session);
+    if (!status.delete(session)) return;
+    owner.delete(session);
+  } else {
+    if (status.get(session) === state && (owner.get(session) ?? null) === agent) return;
+    status.set(session, state);
+    if (agent) owner.set(session, agent);
+    else owner.delete(session);
+  }
+  writeFileSync(STATUS_FILE, JSON.stringify(Object.fromEntries([...status].map(([s, state]) => [s, { state, agent: owner.get(s) }]))));
 }
 
 // A turn can end with work still in flight that will wake the chat up again: Stop's
@@ -187,6 +204,8 @@ function stillBusy(hook) {
 function tmux(...args) {
   return execFileSync("tmux", [...TMUX, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 }
+
+const SHELLS = new Set(["sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", path.basename(process.env.SHELL ?? "sh")]);
 
 // session → what its chat window is running (so an agent without hooks still shows)
 function liveSessions() {
@@ -237,10 +256,16 @@ function worktrees(root) {
     const port = (portFile && existsSync(portFile) ? Number(readFileSync(portFile, "utf8").trim()) : cfg.port?.default) || null;
     const session = path.basename(dir).replace(/[.:]/g, "_"); // tmux forbids . and : in names
     const alive = live.has(session);
-    const running = [binOf(process.env.HUB_CMD ?? cfg.agent), "claude", "codex"].includes(live.get(session));
+    const command = live.get(session);
+    const running = [binOf(process.env.HUB_CMD ?? cfg.agent), "claude", "codex"].includes(command);
+    // A state outlives its agent when that is killed, or exits while the hub is down:
+    // drop it once the pane is back at its shell or runs another agent. Anything else
+    // in the pane is the agent's own doing (its editor), and the state stays.
+    const from = owner.get(session);
+    if (from && (!alive || SHELLS.has(command) || (running && command !== from))) setStatus(session, "off");
     return {
-      session, dir, branch, port, index, main: dir === root, alive,
-      codexRunning: live.get(session) === "codex",
+      session, dir, branch, port, index, main: dir === root, alive, command, running,
+      codexRunning: command === "codex",
       url: port && linkUrl(cfg.url, { port, branch }),
       state: (alive && (status.get(session) ?? (running && "unknown"))) || "off",
       agent: cfg.agent, devCommand: cfg.port ? cfg.dev : null, // no port config, no dev server
@@ -256,7 +281,11 @@ const allWorktrees = () => projects.flatMap(worktrees);
 const codexRuntime = new CodexRuntime({
   getWorktrees: allWorktrees,
   onState: (session, state) => {
-    if (state !== "idle" || status.get(session) !== "done") setStatus(session, state);
+    // Hooks report each change as it happens; a snapshot of the daemon can trail them.
+    if (hooked.has(session)) return;
+    // `off`: the thread unloaded. Only a state the daemon's Codex gave is its to clear.
+    if (state === "off") return void (owner.get(session) === "codex" && setStatus(session, "off"));
+    if (state !== "idle" || status.get(session) !== "done") setStatus(session, state, "codex");
   },
 });
 
@@ -352,7 +381,11 @@ async function handle(req, url, send) {
     if (!wt || !STATES.includes(state)) return send(400, "text/plain", "bad request");
     // `seen` from the page must not overwrite a turn that started meanwhile
     if (q.get("if") && status.get(wt.session) !== q.get("if")) return send(200, "text/plain", "stale");
-    setStatus(wt.session, state);
+    // hooks report by directory, the page by session (its `seen` changes no owner)
+    // (nor does a hook that fires while the agent has its editor in the pane)
+    if (q.has("dir") && (wt.running || !wt.command || SHELLS.has(wt.command))) setStatus(wt.session, state, wt.running ? wt.command : null);
+    else setStatus(wt.session, state);
+    if (q.has("dir") && wt.codexRunning && state !== "off") hooked.add(wt.session);
     return send(200, "text/plain", "ok");
   }
   if (req.method === "POST" && url.pathname === "/api/dev") {

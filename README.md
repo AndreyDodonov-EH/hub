@@ -46,7 +46,10 @@ are waiting or done.
   working, needs you, done, interruption and exit through injected lifecycle hooks.
   For Codex using its shared local daemon, Hub also reads runtime status directly:
   existing sessions show idle, working or needs you without restarting Codex or
-  configuring hooks. A completed turn stays done until viewed. Codex without the
+  configuring hooks. A completed turn stays done until viewed. Once Codex reports
+  through hooks, they speak for it instead of the daemon. A status belongs to the agent
+  that reported it: it is dropped when the pane is back at its shell or runs another
+  agent, so a killed agent leaves nothing behind. Codex without the
   shared daemon needs the injected hooks, reviewed and trusted once in `/hooks`.
   Other agents only show running / not running. Claude started outside the hub needs
   to be restarted with the command the hub prints at startup for detailed status.
