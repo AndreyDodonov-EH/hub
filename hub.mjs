@@ -149,7 +149,24 @@ function launchCommand({ agent, dir }) {
   return `${agent} --settings ${SETTINGS}${resume}`;
 }
 
-const status = new Map(); // session → chat state; absent = nothing reporting
+// session → chat state; absent = nothing reporting. Kept in a file so a restarted hub
+// still knows the chats that are sitting still; `working` is not carried over, as the
+// turn may have ended while nobody was listening.
+const STATUS_FILE = path.join(tmpdir(), `hub-${PORT}-status.json`);
+const status = new Map();
+try {
+  for (const [session, state] of Object.entries(JSON.parse(readFileSync(STATUS_FILE, "utf8")))) {
+    if (STATES.includes(state) && state !== "working") status.set(session, state);
+  }
+} catch {
+  // first run
+}
+function setStatus(session, state) {
+  if (status.get(session) === state) return;
+  if (state === "off") status.delete(session);
+  else status.set(session, state);
+  writeFileSync(STATUS_FILE, JSON.stringify(Object.fromEntries(status)));
+}
 
 // A turn can end with work still in flight that will wake the chat up again: Stop's
 // input lists it (a Claude Code too old to send the arrays just reports done).
@@ -324,8 +341,7 @@ async function handle(req, url, send) {
     if (!wt || !STATES.includes(state)) return send(400, "text/plain", "bad request");
     // `seen` from the page must not overwrite a turn that started meanwhile
     if (q.get("if") && status.get(wt.session) !== q.get("if")) return send(200, "text/plain", "stale");
-    if (state === "off") status.delete(wt.session);
-    else status.set(wt.session, state);
+    setStatus(wt.session, state);
     return send(200, "text/plain", "ok");
   }
   if (req.method === "POST" && url.pathname === "/api/dev") {
