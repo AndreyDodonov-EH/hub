@@ -2,8 +2,10 @@
 // Hub: one browser page per project, listing its git worktrees, each with a terminal
 // attached to that worktree's tmux session (the coding agent runs inside it).
 //
-//   hub [dir]      register the project at dir (default: cwd) and serve it; if a hub
-//                  is already running, just register there and exit
+//   hub [dir]        register the project at dir (default: cwd); starts the server in
+//                    the background unless one is already running
+//   hub --fg [dir]   same, but serve in the foreground
+//   hub stop         stop the background server (tmux sessions stay)
 //
 //   HUB_PORT=5191        another port (default 5190)
 //   HUB_SOCKET=hubtest   another tmux server (keeps tests off the real sessions)
@@ -16,8 +18,8 @@
 //
 // Per-project settings come from an optional `.hub.json` in the project root — see README.
 import { createServer } from "node:http";
-import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -34,6 +36,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const TMUX = ["-L", process.env.HUB_SOCKET ?? "hub", "-f", path.join(HERE, "tmux.conf")];
 const CONFIG_DIR = process.env.HUB_CONFIG_DIR ?? path.join(process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config"), "hub");
 const PROJECTS_FILE = path.join(CONFIG_DIR, "projects.json");
+const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
 const STATES = ["idle", "working", "waiting", "done", "off"];
 const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/" };
 
@@ -207,6 +210,10 @@ async function handle(req, url, send) {
     addProject(root);
     return send(200, "text/plain", nameOf(root));
   }
+  if (req.method === "POST" && url.pathname === "/api/stop") {
+    send(200, "text/plain", "stopping");
+    return setImmediate(() => process.exit(0));
+  }
   if (req.method === "POST" && url.pathname === "/api/status") {
     const q = new URLSearchParams([...url.searchParams, ...(await body(req))]);
     const wt = allWorktrees().find((w) => w.session === q.get("s") || w.dir === q.get("dir"));
@@ -282,11 +289,22 @@ wss.on("connection", async (ws, req) => {
 
 // ---- start ------------------------------------------------------------------
 
-const root = gitRoot(path.resolve(process.argv[2] ?? "."));
+const args = process.argv.slice(2);
+const flags = new Set(args.filter((a) => a.startsWith("--")));
+const [arg] = args.filter((a) => !a.startsWith("--"));
+const call = (route, params = {}) =>
+  fetch(`${BASE}${route}`, { method: "POST", body: new URLSearchParams(params), signal: AbortSignal.timeout(500) }).catch(() => null);
 const pageUrl = (r) => `http://localhost:${PORT}/${r ? `?p=${encodeURIComponent(nameOf(r))}` : ""}`;
 
+if (arg === "stop") {
+  console.log((await call("/api/stop"))?.ok ? "hub stopped" : "hub is not running");
+  process.exit(0);
+}
+
+const root = gitRoot(path.resolve(arg ?? "."));
+
 // A hub already on this port: hand it the project and leave.
-const running = await fetch(`${BASE}/api/projects`, { method: "POST", body: new URLSearchParams({ dir: root ?? "" }), signal: AbortSignal.timeout(2000) }).catch(() => null);
+const running = await call("/api/projects", { dir: root ?? "" });
 if (running?.status === 404) {
   console.error(`hub: port ${PORT} is taken by something that is not this hub`);
   process.exit(1);
@@ -302,6 +320,23 @@ if (!projects.length) {
   console.error("hub: run it inside a git repository (or pass one) to add the first project");
   process.exit(1);
 }
+
+if (!flags.has("--fg")) {
+  // re-run detached, so the server outlives this terminal
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const log = openSync(LOG_FILE, "a");
+  spawn(process.execPath, [fileURLToPath(import.meta.url), "--fg", root ?? projects[0]], { detached: true, stdio: ["ignore", log, log] }).unref();
+  for (let i = 0; i < 50 && !(await call("/api/projects", { dir: "" })); i++) await new Promise((r) => setTimeout(r, 100));
+  if (!(await call("/api/projects", { dir: "" }))) {
+    console.error(`hub: server did not start — see ${LOG_FILE}`);
+    process.exit(1);
+  }
+  console.log(`hub: ${pageUrl(root ?? projects[0])}`);
+  console.log(`running in the background (log: ${LOG_FILE}); \`hub stop\` ends it`);
+  console.log(`status for a claude started outside the hub: restart it with\n  claude --settings ${SETTINGS} --continue`);
+  process.exit(0);
+}
+
 writeFileSync(SETTINGS, JSON.stringify(CLAUDE_HOOKS, null, 2));
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`hub: ${pageUrl(root ?? projects[0])}`);

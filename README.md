@@ -22,8 +22,12 @@ npm link        # puts `hub` on your PATH
 
 ```
 cd your-project
-hub             # serves http://localhost:5190/?p=your-project
+hub             # serves http://localhost:5190/?p=your-project, in the background
+hub stop        # stops the server; tmux sessions stay
+hub --fg        # serve in the foreground instead
 ```
+
+The background server logs to `~/.config/hub/hub.log`.
 
 Run `hub` in another repository while one is running and it is added to the same
 server. Projects are remembered in `~/.config/hub/projects.json`. Each browser tab shows
