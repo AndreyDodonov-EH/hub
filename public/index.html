@@ -34,38 +34,34 @@
   #notify { margin: 10px 12px; padding: 5px 10px; background: none; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; font: inherit; }
   #notify:hover { color: var(--text); }
   #main { flex: 1; min-width: 0; padding: 6px 0 0 8px; }
-  #term { height: 100%; }
+  .term { height: 100%; }
   #empty { color: var(--dim); padding: 24px; }
 </style>
 </head>
 <body>
 <div id="side"><div id="project"><img src="/icon.svg" alt=""><select aria-label="Project"></select></div><div id="rows"></div><button id="notify" hidden>Enable notifications</button></div>
-<div id="main"><div id="empty">Pick a worktree.</div><div id="term"></div></div>
+<div id="main"><div id="empty">Pick a worktree.</div></div>
 <script type="module">
 import { Terminal } from "/xterm.mjs";
 import { FitAddon } from "/addon-fit.mjs";
 import { WebLinksAddon } from "/addon-web-links.mjs";
 
 const COLORS = ["#8c2a2a", "#2a5e8c", "#2a8c57", "#8c6d2a"];
-const termEl = document.getElementById("term");
+const mainEl = document.getElementById("main");
 const params = new URLSearchParams(location.search);
 let project = params.get("p");
 let selected = params.get("s");
 const query = () => `?p=${encodeURIComponent(project)}${selected ? `&s=${encodeURIComponent(selected)}` : ""}`;
-let term, fit, ws;
+const terms = new Map(); // session → { term, fit, ws, el }, kept attached so switching is instant
+const current = () => terms.get(selected);
 
-function send(m) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); }
-
-function open(session) {
-  selected = session;
-  history.replaceState(null, "", query());
-  document.getElementById("empty").hidden = true;
-  if (ws) ws.onclose = null; // a deliberate switch is not a detach
-  ws?.close();
-  term?.dispose();
-  term = new Terminal({ fontFamily: "'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace", fontSize: 14, lineHeight: 1.15,
+function attach(session) {
+  const el = document.createElement("div");
+  el.className = "term";
+  mainEl.append(el);
+  const term = new Terminal({ fontFamily: "'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace", fontSize: 14, lineHeight: 1.15,
     scrollback: 0, theme: { background: "#16181d" } }); // scrollback is tmux's
-  fit = new FitAddon();
+  const fit = new FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon());
   term.parser.registerOscHandler(52, (data) => {
@@ -80,15 +76,33 @@ function open(session) {
     if (e.key === "F11" || e.key === "F12") return false;
     return !(e.type === "keydown" && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "v");
   });
-  term.open(termEl);
+  term.open(el);
   fit.fit();
-  ws = new WebSocket(`ws://${location.host}/pty?s=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`);
-  const t = term;
-  ws.onmessage = (e) => t.write(e.data);
-  ws.onclose = () => t.write("\r\n\x1b[2m[detached]\x1b[0m\r\n");
+  const ws = new WebSocket(`ws://${location.host}/pty?s=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`);
+  const send = (m) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
+  ws.onmessage = (e) => term.write(e.data);
+  ws.onclose = () => term.write("\r\n\x1b[2m[detached — click the row to reattach]\x1b[0m\r\n");
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", cols, rows }));
-  term.focus();
+  const t = { term, fit, ws, el, send };
+  terms.set(session, t);
+  return t;
+}
+
+function open(session) {
+  selected = session;
+  history.replaceState(null, "", query());
+  document.getElementById("empty").hidden = true;
+  let t = terms.get(session);
+  if (t && t.ws.readyState > WebSocket.OPEN) { // detached: start over
+    t.term.dispose();
+    t.el.remove();
+    t = null;
+  }
+  t ??= attach(session);
+  for (const other of terms.values()) other.el.hidden = other !== t;
+  t.fit.fit(); // the window may have been resized while this one was hidden
+  t.term.focus();
   refresh();
 }
 
@@ -167,19 +181,20 @@ window.addEventListener("focus", refresh);
 
 // Right-click copies a shift+drag selection; the browser menu never shows (its Copy
 // can't see terminal text). A plain drag is tmux's selection, copied on release via OSC 52.
-termEl.addEventListener("contextmenu", (e) => {
+mainEl.addEventListener("contextmenu", (e) => {
   e.preventDefault();
+  const term = current()?.term;
   if (!term?.hasSelection()) return;
   navigator.clipboard.writeText(term.getSelection());
   term.clearSelection();
 }, true);
 
 // no text on the clipboard (an image): pass ^V through so claude reads the clipboard itself
-termEl.addEventListener("paste", (e) => {
-  if (!e.clipboardData.getData("text/plain")) send({ t: "i", d: "\x16" });
+mainEl.addEventListener("paste", (e) => {
+  if (!e.clipboardData.getData("text/plain")) current()?.send({ t: "i", d: "\x16" });
 }, true);
 
-new ResizeObserver(() => fit?.fit()).observe(termEl);
+new ResizeObserver(() => current()?.fit.fit()).observe(mainEl);
 await refresh();
 if (selected) open(selected);
 setInterval(refresh, 1500);
