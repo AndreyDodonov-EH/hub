@@ -76,7 +76,7 @@ Optional `.hub.json` in the project's main checkout:
 | `dev` | none | dev-server command, run in the worktree |
 | `port.file` | none | file in each worktree holding its port number |
 | `port.default` | none | port for worktrees without that file |
-| `url` | `http://localhost:{port}/` | what the port link opens |
+| `url` | `http://localhost:{port}/` | what the port link opens; `{port}` and `{branch}` are filled in, URL-encoded (so `{branch}` suits a path segment or query value, not a hostname); must be `http(s)` |
 | `worktree` | `git worktree add` | shell command that creates a worktree for `{name}`, run in the main checkout |
 
 Without `port`, rows have no link and no dev server.

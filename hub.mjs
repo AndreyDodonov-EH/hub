@@ -177,6 +177,16 @@ function portOpen(port) {
   });
 }
 
+// The project's url with {port} and {branch} filled in; null unless it is a web link.
+function linkUrl(template, values) {
+  try {
+    const url = new URL(String(template).replace(/\{(port|branch)\}/g, (_, key) => encodeURIComponent(values[key])));
+    return ["http:", "https:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 // The dev command in a second window; it closes by itself if the server exits.
 function startDev(wt) {
   if (!wt.devCommand) return;
@@ -198,9 +208,9 @@ function worktrees(root) {
     const running = live.get(session) === binOf(cfg.agent);
     return {
       session, dir, branch, port, index, main: dir === root, alive,
-      url: port && cfg.url.replace("{port}", port),
+      url: port && linkUrl(cfg.url, { port, branch }),
       state: (alive && (status.get(session) ?? (running && "unknown"))) || "off",
-      agent: cfg.agent, devCommand: cfg.dev,
+      agent: cfg.agent, devCommand: cfg.port ? cfg.dev : null, // no port config, no dev server
     };
   });
   // the saved order first; worktrees it does not know (new ones) follow in git's order
