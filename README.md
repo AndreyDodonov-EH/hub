@@ -42,9 +42,14 @@ are waiting or done.
   notifications for the last two on chats you are not looking at. "Background tasks" is
   a turn that ended with shells, subagents or scheduled wakeups still pending; it turns
   to done, with its notification, once a turn ends with none left. Claude Code reports all of them through
-  hooks the hub injects at launch (`claude --settings`); other agents only show
-  running / not running. A claude started outside the hub reports nothing until it is
-  restarted with the command the hub prints at startup.
+  hooks the hub injects at launch (`claude --settings`). Codex CLI also reports idle,
+  working, needs you, done, interruption and exit through injected lifecycle hooks.
+  For Codex using its shared local daemon, Hub also reads runtime status directly:
+  existing sessions show idle, working or needs you without restarting Codex or
+  configuring hooks. A completed turn stays done until viewed. Codex without the
+  shared daemon needs the injected hooks, reviewed and trusted once in `/hooks`.
+  Other agents only show running / not running. Claude started outside the hub needs
+  to be restarted with the command the hub prints at startup for detailed status.
 - **Resume**: a session started for a worktree that already has a Claude Code chat
   continues the latest one (`claude --continue`); `/clear` or `/resume` inside it for
   another. Set `agent` to `claude --resume` to pick from the list each time instead.
@@ -83,6 +88,19 @@ Optional `.hub.json` in the project's main checkout:
 
 Without `port`, rows have no link and no dev server.
 
+To start Codex instead, set `"agent": "codex"` (or `"codex resume --last"` to
+resume the latest chat in each worktree) in `.hub.json`, or launch Hub with
+`HUB_CMD=codex hub`. Use a Codex CLI version with lifecycle hooks and inline
+`hooks` configuration (verified with 0.160.0). For hook-based reporting without
+the shared daemon, use `/hooks` to review and trust the Hub status hooks. Hub supplies them only to that
+invocation; it does not edit your Codex configuration. When the shared local daemon
+is available, existing Codex panes are detected automatically through its read-only
+`thread/loaded/list` and `thread/read` metadata, including fresh chats before their
+first prompt. The same sidebar states,
+project badges and browser notifications work for both agents. Codex reports
+done at the end of a turn; its hooks do not report pending background tasks.
+See the [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks).
+
 ## Environment
 
 | variable | default | |
@@ -99,7 +117,7 @@ other web origin, but another user account on the same machine can reach the por
 
 ## Not yet
 
-- Status hooks for agents other than Claude Code.
+- Status hooks for agents other than Claude Code and Codex CLI.
 - Configurable row metadata.
 - Viewing the `dev` window's output from the page.
 - An image viewer route agents can link to.

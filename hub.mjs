@@ -27,6 +27,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
+import { withCodexHooks } from "./codex-status.mjs";
+import { CodexRuntime } from "./codex-runtime.mjs";
 
 const require = createRequire(import.meta.url);
 const pty = require("node-pty");
@@ -140,10 +142,11 @@ function hasClaudeChat(dir) {
   }
 }
 
-// claude gets the status hooks and picks up the worktree's last chat (`--continue` alone
-// exits when there is none); any other agent only shows running / not running
+// Claude and Codex get status hooks. Claude also picks up the worktree's last chat
+// (`--continue` alone exits when there is none).
 function launchCommand({ agent, dir }) {
-  if (process.env.HUB_CMD !== undefined) return process.env.HUB_CMD;
+  agent = process.env.HUB_CMD ?? agent;
+  if (binOf(agent) === "codex") return withCodexHooks(agent, BASE);
   if (binOf(agent) !== "claude") return agent;
   const resume = !/\s(-c|--continue|-r|--resume)\b/.test(agent) && hasClaudeChat(dir) ? " --continue" : "";
   return `${agent} --settings ${SETTINGS}${resume}`;
@@ -234,9 +237,10 @@ function worktrees(root) {
     const port = (portFile && existsSync(portFile) ? Number(readFileSync(portFile, "utf8").trim()) : cfg.port?.default) || null;
     const session = path.basename(dir).replace(/[.:]/g, "_"); // tmux forbids . and : in names
     const alive = live.has(session);
-    const running = live.get(session) === binOf(cfg.agent);
+    const running = [binOf(process.env.HUB_CMD ?? cfg.agent), "claude", "codex"].includes(live.get(session));
     return {
       session, dir, branch, port, index, main: dir === root, alive,
+      codexRunning: live.get(session) === "codex",
       url: port && linkUrl(cfg.url, { port, branch }),
       state: (alive && (status.get(session) ?? (running && "unknown"))) || "off",
       agent: cfg.agent, devCommand: cfg.port ? cfg.dev : null, // no port config, no dev server
@@ -249,6 +253,12 @@ function worktrees(root) {
 }
 
 const allWorktrees = () => projects.flatMap(worktrees);
+const codexRuntime = new CodexRuntime({
+  getWorktrees: allWorktrees,
+  onState: (session, state) => {
+    if (state !== "idle" || status.get(session) !== "done") setStatus(session, state);
+  },
+});
 
 const run = promisify(execFile);
 
@@ -289,6 +299,7 @@ function body(req) {
 
 async function handle(req, url, send) {
   if (url.pathname === "/api/sessions") {
+    await codexRuntime.refresh();
     const root = findProject(url.searchParams.get("p"));
     const list = root ? worktrees(root) : [];
     const up = await Promise.all(list.map((w) => portOpen(w.port)));
@@ -414,6 +425,10 @@ const [arg] = args.filter((a) => !a.startsWith("--"));
 const call = (route, params = {}) =>
   fetch(`${BASE}${route}`, { method: "POST", body: new URLSearchParams(params), signal: AbortSignal.timeout(500) }).catch(() => null);
 const pageUrl = (r) => `http://localhost:${PORT}/${r ? `?p=${encodeURIComponent(nameOf(r))}` : ""}`;
+function printStatusHelp() {
+  console.log(`status for a claude started outside the hub: restart it with\n  claude --settings ${SETTINGS} --continue`);
+  console.log(`Codex status is read automatically from its shared local daemon.\nWithout the daemon, restart Codex with\n  ${withCodexHooks("codex", BASE)} resume --last\nthen review and trust the Hub hooks in /hooks`);
+}
 
 if (arg === "stop") {
   const res = await call("/api/stop");
@@ -458,13 +473,14 @@ if (!flags.has("--fg")) {
   }
   console.log(`hub: ${pageUrl(root ?? projects[0])}`);
   console.log(`running in the background (log: ${LOG_FILE}); \`hub stop\` ends it`);
-  console.log(`status for a claude started outside the hub: restart it with\n  claude --settings ${SETTINGS} --continue`);
+  printStatusHelp();
   process.exit(0);
 }
 
 writeFileSync(SETTINGS, JSON.stringify(CLAUDE_HOOKS, null, 2));
 server.listen(PORT, "127.0.0.1", () => {
+  setInterval(() => codexRuntime.refresh(), 1500).unref();
   console.log(`hub: ${pageUrl(root ?? projects[0])}`);
   console.log(`projects: ${projects.map(nameOf).join(", ")}`);
-  console.log(`status for a claude started outside the hub: restart it with\n  claude --settings ${SETTINGS} --continue`);
+  printStatusHelp();
 });
