@@ -60,6 +60,7 @@ function open(session) {
   selected = session;
   history.replaceState(null, "", query());
   document.getElementById("empty").hidden = true;
+  if (ws) ws.onclose = null; // a deliberate switch is not a detach
   ws?.close();
   term?.dispose();
   term = new Terminal({ fontFamily: "'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace", fontSize: 14, lineHeight: 1.15,
@@ -82,8 +83,9 @@ function open(session) {
   term.open(termEl);
   fit.fit();
   ws = new WebSocket(`ws://${location.host}/pty?s=${encodeURIComponent(session)}&cols=${term.cols}&rows=${term.rows}`);
-  ws.onmessage = (e) => term.write(e.data);
-  ws.onclose = () => term.write("\r\n\x1b[2m[detached]\x1b[0m\r\n");
+  const t = term;
+  ws.onmessage = (e) => t.write(e.data);
+  ws.onclose = () => t.write("\r\n\x1b[2m[detached]\x1b[0m\r\n");
   term.onData((d) => send({ t: "i", d }));
   term.onResize(({ cols, rows }) => send({ t: "r", cols, rows }));
   term.focus();
