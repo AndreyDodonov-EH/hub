@@ -1,0 +1,22 @@
+{
+  "name": "hub",
+  "version": "0.1.0",
+  "description": "One browser page for all your coding-agent chats: a sidebar of git worktrees, each with its tmux-backed terminal, status and dev-server link.",
+  "type": "module",
+  "bin": {
+    "hub": "hub.mjs"
+  },
+  "scripts": {
+    "start": "node hub.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.22.0"
+  }
+}
