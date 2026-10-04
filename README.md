@@ -38,8 +38,10 @@ are waiting or done.
 - **Row colour**: one of four, keyed to the port (or git's worktree order without one).
 - **Row order**: drag a row to move it. The order is kept per project in
   `~/.config/hub/order.json`; new worktrees go to the end.
-- **Status**: idle / working / needs you / done, with browser notifications for the
-  last two on chats you are not looking at. Claude Code reports all of them through
+- **Status**: idle / working / background tasks / needs you / done, with browser
+  notifications for the last two on chats you are not looking at. "Background tasks" is
+  a turn that ended with shells, subagents or scheduled wakeups still pending; it turns
+  to done, with its notification, once a turn ends with none left. Claude Code reports all of them through
   hooks the hub injects at launch (`claude --settings`); other agents only show
   running / not running. A claude started outside the hub reports nothing until it is
   restarted with the command the hub prints at startup.

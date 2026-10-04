@@ -34,11 +34,12 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #555c68; }
   .idle .dot { background: #8b93a1; }
   .working .dot { background: #5aa9f0; animation: pulse 1s ease-in-out infinite; }
+  .background .dot { background: #5aa9f0; animation: pulse 3s ease-in-out infinite; }
   .waiting .dot { background: #f0a23c; }
   .done .dot { background: #4fbf7a; }
   .waiting .state, .done .state { color: var(--text); }
   @keyframes pulse { 50% { opacity: .3; } }
-  @media (prefers-reduced-motion: reduce) { .working .dot { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .working .dot, .background .dot { animation: none; } }
   .state { flex: 1; }
   #notify { margin: 10px 12px; padding: 5px 10px; background: none; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; font: inherit; }
   #notify:hover { color: var(--text); }
@@ -119,7 +120,7 @@ function open(session) {
   refresh();
 }
 
-const LABEL = { off: "no chat", unknown: "running", idle: "idle", working: "working", waiting: "needs you", done: "done" };
+const LABEL = { off: "no chat", unknown: "running", idle: "idle", working: "working", background: "background tasks", waiting: "needs you", done: "done" };
 const prev = new Map();
 let rendered;
 let dragging; // the row being dragged to a new place; the list is not rebuilt meanwhile

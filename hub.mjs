@@ -39,7 +39,7 @@ const CONFIG_DIR = process.env.HUB_CONFIG_DIR ?? path.join(process.env.XDG_CONFI
 const PROJECTS_FILE = path.join(CONFIG_DIR, "projects.json");
 const ORDER_FILE = path.join(CONFIG_DIR, "order.json");
 const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
-const STATES = ["idle", "working", "waiting", "done", "off"];
+const STATES = ["idle", "working", "background", "waiting", "done", "off"];
 const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/", worktree: null };
 
 const lib = (spec) => require.resolve(spec);
@@ -110,11 +110,12 @@ function config(root) {
 
 // Claude Code hooks post the chat state back here, keyed by the directory claude runs
 // in. Injected with `claude --settings`, so they work on every branch of every project.
-const report = (state) => ({
+// `input` also sends the hook's own input (JSON on stdin) for the hub to look into.
+const report = (state, input) => ({
   type: "command",
-  command: `curl -s -m 2 -o /dev/null -X POST --data-urlencode "dir=$CLAUDE_PROJECT_DIR" "${BASE}/api/status?state=${state}" || true`,
+  command: `curl -s -m 2 -o /dev/null -X POST --data-urlencode "dir=$CLAUDE_PROJECT_DIR"${input ? ' --data-urlencode "hook@-"' : ""} "${BASE}/api/status?state=${state}" || true`,
 });
-const on = (state, matcher) => [{ ...(matcher && { matcher }), hooks: [report(state)] }];
+const on = (state, matcher, input) => [{ ...(matcher && { matcher }), hooks: [report(state, input)] }];
 const SETTINGS = path.join(tmpdir(), `hub-${PORT}-settings.json`);
 const CLAUDE_HOOKS = {
   hooks: {
@@ -123,7 +124,7 @@ const CLAUDE_HOOKS = {
     PostToolUse: on("working"), // also clears `waiting` once a permission prompt is answered
     PreToolUse: on("waiting", "AskUserQuestion|ExitPlanMode"),
     Notification: on("waiting", "permission_prompt|elicitation_dialog"),
-    Stop: on("done"),
+    Stop: on("done", null, true), // `background` instead while shells, subagents or wakeups are pending
     SessionEnd: on("off"),
   },
 };
@@ -149,6 +150,17 @@ function launchCommand({ agent, dir }) {
 }
 
 const status = new Map(); // session → chat state; absent = nothing reporting
+
+// A turn can end with work still in flight that will wake the chat up again: Stop's
+// input lists it (a Claude Code too old to send the arrays just reports done).
+function stillBusy(hook) {
+  try {
+    const { background_tasks = [], session_crons = [] } = JSON.parse(hook);
+    return background_tasks.length + session_crons.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // ---- tmux -------------------------------------------------------------------
 
@@ -308,7 +320,7 @@ async function handle(req, url, send) {
   if (req.method === "POST" && url.pathname === "/api/status") {
     const q = new URLSearchParams([...url.searchParams, ...(await body(req))]);
     const wt = allWorktrees().find((w) => w.session === q.get("s") || w.dir === q.get("dir"));
-    const state = q.get("state");
+    const state = q.get("state") === "done" && stillBusy(q.get("hook")) ? "background" : q.get("state");
     if (!wt || !STATES.includes(state)) return send(400, "text/plain", "bad request");
     // `seen` from the page must not overwrite a turn that started meanwhile
     if (q.get("if") && status.get(wt.session) !== q.get("if")) return send(200, "text/plain", "stale");
