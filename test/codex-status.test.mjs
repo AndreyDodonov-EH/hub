@@ -21,7 +21,7 @@ function run(args, input = "", env = process.env) {
 test("compaction preserves working status and unanswered questions need attention", () => {
   assert.equal(hookState({ hook_event_name: "SessionStart", source: "compact" }), "working");
   for (const tool_name of ["request_user_input", "functions.request_user_input", "request_user_input_async"]) {
-    assert.equal(hookState({ hook_event_name: "PreToolUse", tool_name }), "waiting");
+    assert.equal(hookState({ hook_event_name: "PreToolUse", tool_name }), "asking");
   }
   assert.equal(hookState({ hook_event_name: "PreToolUse", tool_name: "Bash" }), "working");
   assert.equal(hookState({ hook_event_name: "unknown" }), null);

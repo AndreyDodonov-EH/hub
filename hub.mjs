@@ -123,8 +123,8 @@ const CLAUDE_HOOKS = {
   hooks: {
     SessionStart: on("idle"),
     UserPromptSubmit: on("working"),
-    PostToolUse: on("working"), // also clears `waiting` once a permission prompt is answered
-    PreToolUse: on("waiting", "AskUserQuestion|ExitPlanMode"),
+    PostToolUse: on("working"), // also clears `waiting` once an allowed tool has run
+    PreToolUse: on("asking", "AskUserQuestion|ExitPlanMode"),
     Notification: on("waiting", "permission_prompt|elicitation_dialog"),
     Stop: on("done", null, true), // `background` instead while shells, subagents or wakeups are pending
     SessionEnd: on("off"),
@@ -163,6 +163,8 @@ const owner = new Map();
 // sessions whose Codex reports through hooks, which then speak for it instead of the
 // daemon. Not kept across a restart: the next hook says so again.
 const hooked = new Set();
+// sessions whose `waiting` is a question, not a permission prompt
+const asking = new Set();
 try {
   for (const [session, entry] of Object.entries(JSON.parse(readFileSync(STATUS_FILE, "utf8")))) {
     const { state, agent } = typeof entry === "string" ? { state: entry } : entry; // a string: written by an older hub
@@ -175,6 +177,7 @@ try {
 }
 // `agent`: the pane command the state belongs to (null: none); left out, it stays as it is
 function setStatus(session, state, agent = owner.get(session) ?? null) {
+  if (state !== "waiting") asking.delete(session);
   if (state === "off") {
     hooked.delete(session);
     if (!status.delete(session)) return;
@@ -186,6 +189,16 @@ function setStatus(session, state, agent = owner.get(session) ?? null) {
     else owner.delete(session);
   }
   writeFileSync(STATUS_FILE, JSON.stringify(Object.fromEntries([...status].map(([s, state]) => [s, { state, agent: owner.get(s) }]))));
+}
+
+// No hook says that a prompt was answered: an allowed tool reports once it has run, a
+// refusal never. The keys typed into a waiting chat stand in for it: Esc refuses and
+// leaves the chat idle; Enter or a shortcut key allows, and the tool is running. A
+// question reports its own answer at once, so only its Esc counts.
+function answered(session, keys) {
+  if (status.get(session) !== "waiting") return;
+  if (keys === "\x1b") setStatus(session, "idle");
+  else if (!asking.has(session) && /^[\r!-~]$/.test(keys)) setStatus(session, "working");
 }
 
 // A turn can end with work still in flight that will wake the chat up again: Stop's
@@ -377,10 +390,12 @@ async function handle(req, url, send) {
   if (req.method === "POST" && url.pathname === "/api/status") {
     const q = new URLSearchParams([...url.searchParams, ...(await body(req))]);
     const wt = allWorktrees().find((w) => w.session === q.get("s") || w.dir === q.get("dir"));
-    const state = q.get("state") === "done" && stillBusy(q.get("hook")) ? "background" : q.get("state");
+    const asks = q.get("state") === "asking"; // waiting, on a question
+    const state = asks ? "waiting" : q.get("state") === "done" && stillBusy(q.get("hook")) ? "background" : q.get("state");
     if (!wt || !STATES.includes(state)) return send(400, "text/plain", "bad request");
     // `seen` from the page must not overwrite a turn that started meanwhile
     if (q.get("if") && status.get(wt.session) !== q.get("if")) return send(200, "text/plain", "stale");
+    if (asks) asking.add(wt.session);
     // hooks report by directory, the page by session (its `seen` changes no owner)
     // (nor does a hook that fires while the agent has its editor in the pane)
     if (q.has("dir") && (wt.running || !wt.command || SHELLS.has(wt.command))) setStatus(wt.session, state, wt.running ? wt.command : null);
@@ -446,8 +461,10 @@ wss.on("connection", async (ws, req) => {
   term.onExit(() => ws.close());
   ws.on("message", (raw) => {
     const m = JSON.parse(raw);
-    if (m.t === "i") term.write(m.d);
-    else if (m.t === "r") term.resize(m.cols, m.rows);
+    if (m.t === "i") {
+      answered(wt.session, m.d);
+      term.write(m.d);
+    } else if (m.t === "r") term.resize(m.cols, m.rows);
   });
   ws.on("close", () => term.kill()); // detaches the client; the tmux session stays
 });

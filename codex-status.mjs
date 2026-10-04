@@ -23,7 +23,7 @@ export function hookState(hook) {
     case "SessionStart": return hook.source === "compact" ? "working" : "idle";
     case "UserPromptSubmit":
     case "PostToolUse": return "working";
-    case "PreToolUse": return /(^|[.])request_user_input(?:_async)?$/.test(hook.tool_name ?? "") ? "waiting" : "working";
+    case "PreToolUse": return /(^|[.])request_user_input(?:_async)?$/.test(hook.tool_name ?? "") ? "asking" : "working";
     case "PermissionRequest": return "waiting";
     case "Stop": return "done";
     case "Interrupt": return "idle";

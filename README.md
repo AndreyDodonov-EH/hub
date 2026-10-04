@@ -41,7 +41,10 @@ are waiting or done.
 - **Status**: idle / working / background tasks / needs you / done, with browser
   notifications for the last two on chats you are not looking at. "Background tasks" is
   a turn that ended with shells, subagents or scheduled wakeups still pending; it turns
-  to done, with its notification, once a turn ends with none left. Claude Code reports all of them through
+  to done, with its notification, once a turn ends with none left. "Needs you" goes
+  when you answer in the page, which no hook reports: Enter or a shortcut key allows
+  (working), Esc refuses (idle). A question reports its own answer; one given outside
+  the page (`tmux attach`) shows once the tool has run. Claude Code reports all of them through
   hooks the hub injects at launch (`claude --settings`). Codex CLI also reports idle,
   working, needs you, done, interruption and exit through injected lifecycle hooks.
   For Codex using its shared local daemon, Hub also reads runtime status directly:
