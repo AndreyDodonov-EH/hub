@@ -31,7 +31,9 @@ The background server logs to `~/.config/hub/hub.log`.
 
 Run `hub` in another repository while one is running and it is added to the same
 server. Projects are remembered in `~/.config/hub/projects.json`. Each browser tab shows
-one project (`?p=<name>`); the dropdown at the top of the sidebar switches.
+one project (`?p=<name>`); the links at the top of the sidebar switch (ctrl/middle-click
+opens a project in its own tab), and a badge on another project counts its chats that
+are waiting or done.
 
 - **Row colour**: one of four, keyed to the port (or the row order without one).
 - **Status**: idle / working / needs you / done, with browser notifications for the
@@ -39,6 +41,10 @@ one project (`?p=<name>`); the dropdown at the top of the sidebar switches.
   hooks the hub injects at launch (`claude --settings`); other agents only show
   running / not running. A claude started outside the hub reports nothing until it is
   restarted with the command the hub prints at startup.
+- **New worktree**: *+ New worktree* under the list, then type a name. By
+  default that is `git worktree add ../<project>-<name>` on branch `<name>` (created
+  from the main checkout's HEAD unless it exists); a project can substitute its own
+  command (`worktree` below). The new row opens right away.
 - **Port link**: lit when something answers on the worktree's port. Clicking a dimmed
   one starts the project's dev command in a second tmux window.
 - **Clipboard**: a plain drag copies on release; shift+drag then right-click copies
@@ -54,7 +60,8 @@ Optional `.hub.json` in the project's main checkout:
   "agent": "claude",
   "dev": "npm run dev",
   "port": { "file": ".dev-port", "default": 5199 },
-  "url": "http://localhost:{port}/"
+  "url": "http://localhost:{port}/",
+  "worktree": "tools/worktree-create.sh {name}"
 }
 ```
 
@@ -65,6 +72,7 @@ Optional `.hub.json` in the project's main checkout:
 | `port.file` | none | file in each worktree holding its port number |
 | `port.default` | none | port for worktrees without that file |
 | `url` | `http://localhost:{port}/` | what the port link opens |
+| `worktree` | `git worktree add` | shell command that creates a worktree for `{name}`, run in the main checkout |
 
 Without `port`, rows have no link and no dev server.
 

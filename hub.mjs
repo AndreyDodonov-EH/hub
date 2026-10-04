@@ -18,13 +18,14 @@
 //
 // Per-project settings come from an optional `.hub.json` in the project root — see README.
 import { createServer } from "node:http";
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
 const require = createRequire(import.meta.url);
@@ -38,7 +39,7 @@ const CONFIG_DIR = process.env.HUB_CONFIG_DIR ?? path.join(process.env.XDG_CONFI
 const PROJECTS_FILE = path.join(CONFIG_DIR, "projects.json");
 const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
 const STATES = ["idle", "working", "waiting", "done", "off"];
-const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/" };
+const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/", worktree: null };
 
 const lib = (spec) => require.resolve(spec);
 const STATIC = {
@@ -174,6 +175,24 @@ function worktrees(root) {
 
 const allWorktrees = () => projects.flatMap(worktrees);
 
+const run = promisify(execFile);
+
+// A new worktree: the project's own `worktree` command if it has one, else a sibling
+// directory <project>-<name> on branch <name> (created from the main checkout's HEAD
+// unless it exists). Returns the row of whatever worktree appeared.
+async function createWorktree(root, name) {
+  const cfg = config(root);
+  const before = new Set(worktrees(root).map((w) => w.dir));
+  if (cfg.worktree) {
+    // the name is validated by the caller, so it is safe inside the shell command
+    await run("sh", ["-c", cfg.worktree.replaceAll("{name}", name)], { cwd: root, timeout: 120_000 });
+  } else {
+    const exists = await run("git", ["-C", root, "show-ref", "--verify", "--quiet", `refs/heads/${name}`]).then(() => true, () => false);
+    await run("git", ["-C", root, "worktree", "add", `${root}-${name}`, ...(exists ? [name] : ["-b", name])]);
+  }
+  return worktrees(root).find((w) => !before.has(w.dir));
+}
+
 // ---- http -------------------------------------------------------------------
 
 const ownHost = (h) => [`localhost:${PORT}`, `127.0.0.1:${PORT}`].includes(h);
@@ -200,7 +219,11 @@ async function handle(req, url, send) {
     const up = await Promise.all(list.map((w) => portOpen(w.port)));
     return send(200, "application/json", JSON.stringify({
       project: root && nameOf(root),
-      projects: projects.map(nameOf),
+      // chats needing attention, so the page can flag projects it is not showing
+      projects: projects.map((r) => ({
+        name: nameOf(r),
+        pending: (r === root ? list : worktrees(r)).filter((w) => ["waiting", "done"].includes(w.state)).length,
+      })),
       sessions: list.map((w, i) => ({ ...w, dev: up[i] })),
     }));
   }
@@ -209,6 +232,20 @@ async function handle(req, url, send) {
     if (!root) return send(400, "text/plain", "not a git repository");
     addProject(root);
     return send(200, "text/plain", nameOf(root));
+  }
+  if (req.method === "POST" && url.pathname === "/api/worktrees") {
+    const q = await body(req);
+    const root = projects.find((r) => nameOf(r) === q.get("p"));
+    const name = q.get("name")?.trim() ?? "";
+    if (!root) return send(400, "text/plain", "unknown project");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return send(400, "text/plain", "letters, digits, . _ - only");
+    try {
+      const wt = await createWorktree(root, name);
+      if (!wt) return send(400, "text/plain", "the command ran, but no worktree appeared");
+      return send(200, "text/plain", wt.session);
+    } catch (e) {
+      return send(400, "text/plain", (e.stderr || e.message).trim());
+    }
   }
   if (req.method === "POST" && url.pathname === "/api/stop") {
     send(200, "text/plain", "stopping");
@@ -297,7 +334,13 @@ const call = (route, params = {}) =>
 const pageUrl = (r) => `http://localhost:${PORT}/${r ? `?p=${encodeURIComponent(nameOf(r))}` : ""}`;
 
 if (arg === "stop") {
-  console.log((await call("/api/stop"))?.ok ? "hub stopped" : "hub is not running");
+  const res = await call("/api/stop");
+  if (res && !res.ok) {
+    // it answers but does not know /api/stop: an older hub, or not a hub at all
+    console.error(`hub: whatever is on port ${PORT} did not stop (HTTP ${res.status}) — end that process yourself`);
+    process.exit(1);
+  }
+  console.log(res ? "hub stopped" : "hub is not running");
   process.exit(0);
 }
 
