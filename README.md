@@ -43,6 +43,9 @@ are waiting or done.
   hooks the hub injects at launch (`claude --settings`); other agents only show
   running / not running. A claude started outside the hub reports nothing until it is
   restarted with the command the hub prints at startup.
+- **Resume**: a session started for a worktree that already has a Claude Code chat
+  continues the latest one (`claude --continue`); `/clear` or `/resume` inside it for
+  another. Set `agent` to `claude --resume` to pick from the list each time instead.
 - **New worktree**: *+ New worktree* under the list, then type a name. By
   default that is `git worktree add ../<project>-<name>` on branch `<name>` (created
   from the main checkout's HEAD unless it exists); a project can substitute its own

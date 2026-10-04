@@ -19,7 +19,7 @@
 // Per-project settings come from an optional `.hub.json` in the project root — see README.
 import { createServer } from "node:http";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -129,8 +129,24 @@ const CLAUDE_HOOKS = {
 };
 
 const binOf = (agent) => path.basename(agent.trim().split(/\s+/)[0]);
-// claude gets the status hooks; any other agent only shows running / not running
-const launchCommand = (agent) => process.env.HUB_CMD ?? (binOf(agent) === "claude" ? `${agent} --settings ${SETTINGS}` : agent);
+// Claude Code keeps a directory's chats as <config>/projects/<dir, non-alphanumerics as ->/*.jsonl
+function hasClaudeChat(dir) {
+  const root = process.env.CLAUDE_CONFIG_DIR ?? path.join(homedir(), ".claude");
+  try {
+    return readdirSync(path.join(root, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"))).some((f) => f.endsWith(".jsonl"));
+  } catch {
+    return false; // never run here
+  }
+}
+
+// claude gets the status hooks and picks up the worktree's last chat (`--continue` alone
+// exits when there is none); any other agent only shows running / not running
+function launchCommand({ agent, dir }) {
+  if (process.env.HUB_CMD !== undefined) return process.env.HUB_CMD;
+  if (binOf(agent) !== "claude") return agent;
+  const resume = !/\s(-c|--continue|-r|--resume)\b/.test(agent) && hasClaudeChat(dir) ? " --continue" : "";
+  return `${agent} --settings ${SETTINGS}${resume}`;
+}
 
 const status = new Map(); // session → chat state; absent = nothing reporting
 
@@ -329,7 +345,7 @@ wss.on("connection", async (ws, req) => {
   if (!wt.alive) {
     tmux("new-session", "-d", "-s", wt.session, "-c", wt.dir);
     // typed into a shell, so the session outlives the agent exiting
-    const cmd = launchCommand(wt.agent);
+    const cmd = launchCommand(wt);
     if (cmd) tmux("send-keys", "-t", `=${wt.session}:`, cmd, "Enter");
     if (!(await portOpen(wt.port))) startDev(wt);
   }
