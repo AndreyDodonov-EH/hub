@@ -23,6 +23,7 @@ npm link        # puts `hub` on your PATH
 ```
 cd your-project
 hub             # serves http://localhost:5190/?p=your-project, in the background
+                # (the next free port if 5190 is taken; it prints the address)
 hub stop        # stops the server; tmux sessions stay
 hub --fg        # serve in the foreground instead
 ```
@@ -114,10 +115,17 @@ See the [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks).
 
 | variable | default | |
 | --- | --- | --- |
-| `HUB_PORT` | `5190` | port of the hub page |
+| `HUB_PORT` | first free from `5190` | port of the hub page, and no other: taken by something else, the hub does not start |
 | `HUB_SOCKET` | `hub` | tmux server socket name |
-| `HUB_CONFIG_DIR` | `~/.config/hub` | where the project list and row order live |
+| `HUB_CONFIG_DIR` | `~/.config/hub` | where the project list, row order and port live |
 | `HUB_CMD` | — | overrides `agent` for new sessions; empty = bare shell |
+
+The hub writes its port to `~/.config/hub/port`. `hub` and `hub stop` look for the
+server there, so they find it without `HUB_PORT`, and the next start takes the same
+port again if it is free, whatever chose it: bookmarks, the notification permission
+and the status hooks of chats already running all hang on the address. If the hub
+does have to move, restart those chats for their status to show. `HUB_PORT=5190 hub`
+once moves it back.
 
 ## Security
 

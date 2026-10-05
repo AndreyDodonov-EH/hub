@@ -7,7 +7,7 @@
 //   hub --fg [dir]   same, but serve in the foreground
 //   hub stop         stop the background server (tmux sessions stay)
 //
-//   HUB_PORT=5191        another port (default 5190)
+//   HUB_PORT=5191        this port and no other (default: the first free one from 5190)
 //   HUB_SOCKET=hubtest   another tmux server (keeps tests off the real sessions)
 //   HUB_CONFIG_DIR=...   where the project list is kept (default ~/.config/hub)
 //   HUB_CMD=''           new sessions start a bare shell, whatever the project config says
@@ -34,15 +34,47 @@ const require = createRequire(import.meta.url);
 const pty = require("node-pty");
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.HUB_PORT ?? 5190);
-const BASE = `http://127.0.0.1:${PORT}`;
 const TMUX = ["-L", process.env.HUB_SOCKET ?? "hub", "-f", path.join(HERE, "tmux.conf")];
 const CONFIG_DIR = process.env.HUB_CONFIG_DIR ?? path.join(process.env.XDG_CONFIG_HOME ?? path.join(homedir(), ".config"), "hub");
 const PROJECTS_FILE = path.join(CONFIG_DIR, "projects.json");
 const ORDER_FILE = path.join(CONFIG_DIR, "order.json");
+const PORT_FILE = path.join(CONFIG_DIR, "port");
 const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
 const STATES = ["idle", "working", "background", "waiting", "done", "off"];
 const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/", worktree: null };
+
+// ---- port -------------------------------------------------------------------
+
+const FIRST_PORT = 5190;
+// a hub names itself in every reply, which tells it from whatever else holds a port
+const isHub = (res) => res?.headers.get("server") === "hub";
+
+// HUB_PORT pins the port. Without it the hub takes the first free one from 5190 up and
+// writes it down: later `hub` calls find the server there, and the next start comes
+// back to it, so the page's address and the hooks of chats already running still hold.
+async function findPort() {
+  if (process.env.HUB_PORT) {
+    const pinned = Number(process.env.HUB_PORT);
+    if (Number.isInteger(pinned) && pinned > 0 && pinned < 65536) return pinned;
+    console.error(`hub: HUB_PORT is not a port number: ${process.env.HUB_PORT}`);
+    process.exit(1);
+  }
+  let last = null;
+  try {
+    last = Number(readFileSync(PORT_FILE, "utf8")) || null;
+  } catch {
+    // no hub has run yet
+  }
+  if (last && isHub(await fetch(`http://127.0.0.1:${last}/`, { method: "HEAD", signal: AbortSignal.timeout(500) }).catch(() => null))) return last;
+  for (const port of [last, ...Array.from({ length: 100 }, (_, i) => FIRST_PORT + i)]) {
+    if (port && !(await portOpen(port))) return port;
+  }
+  console.error(`hub: no free port from ${FIRST_PORT} to ${FIRST_PORT + 99} — set HUB_PORT`);
+  process.exit(1);
+}
+
+const PORT = await findPort(); // where a hub is running, else where this one will
+const BASE = `http://127.0.0.1:${PORT}`;
 
 const lib = (spec) => require.resolve(spec);
 const STATIC = {
@@ -416,7 +448,7 @@ async function handle(req, url, send) {
 
 const server = createServer(async (req, res) => {
   const send = (code, type, data) => {
-    res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
+    res.writeHead(code, { "content-type": type, "cache-control": "no-store", server: "hub" });
     res.end(data);
   };
   // hooks and the CLI send no Origin; a browser always does on a cross-site POST
@@ -497,7 +529,7 @@ const root = gitRoot(path.resolve(arg ?? "."));
 
 // A hub already on this port: hand it the project and leave.
 const running = await call("/api/projects", { dir: root ?? "" });
-if (running?.status === 404) {
+if (running && !isHub(running)) {
   console.error(`hub: port ${PORT} is taken by something that is not this hub`);
   process.exit(1);
 }
@@ -531,6 +563,8 @@ if (!flags.has("--fg")) {
 
 writeFileSync(SETTINGS, JSON.stringify(CLAUDE_HOOKS, null, 2));
 server.listen(PORT, "127.0.0.1", () => {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(PORT_FILE, String(PORT));
   setInterval(() => codexRuntime.refresh(), 1500).unref();
   console.log(`hub: ${pageUrl(root ?? projects[0])}`);
   console.log(`projects: ${projects.map(nameOf).join(", ")}`);
