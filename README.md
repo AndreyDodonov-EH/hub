@@ -1,6 +1,6 @@
 # Hub
 
-One browser page for all your coding-agent chats.
+Front-end hub for your agentic work. Never leave browser.
 
 ![The hub page: a project's worktrees in the sidebar, the agent chat of one of them in the terminal](docs/screenshot.png)
 
