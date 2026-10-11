@@ -19,7 +19,7 @@
 // Per-project settings come from an optional `.hub.json` in the project root — see README.
 import { createServer } from "node:http";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, readdirSync, readlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -302,11 +302,44 @@ function startDev(wt) {
 // Ctrl-C, as you would type it, which a server takes as the cue to shut down; one still
 // there five seconds on has its window closed under it.
 async function stopDev(wt) {
-  if (!wt.devWindow) return;
+  if (!wt.devWindow) return stopStray(wt);
   try {
     tmux("send-keys", "-t", wt.devWindow, "C-c");
     for (let i = 0; i < 50 && devWindows().get(wt.session) === wt.devWindow; i++) await new Promise((r) => setTimeout(r, 100));
     tmux("kill-window", "-t", wt.devWindow);
+  } catch {
+    // it went by itself
+  }
+}
+
+// The process listening on a port, if it runs inside dir: a stray, a dev server the hub
+// did not start (the agent did, say) but this worktree's all the same.
+async function listenerIn(port, dir) {
+  try {
+    const linux = process.platform === "linux";
+    const ask = (cmd, ...args) => run(cmd, args, { timeout: 2000 }).then((r) => r.stdout);
+    const out = await (linux ? ask("ss", "-Hltnp", `sport = :${port}`) : ask("lsof", "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"));
+    const pid = Number(out.match(linux ? /pid=(\d+)/ : /^p(\d+)/m)?.[1]);
+    if (!pid) return null;
+    const cwd = linux ? readlinkSync(`/proc/${pid}/cwd`) : (await ask("lsof", "-a", "-p", String(pid), "-d", "cwd", "-Fn")).match(/^n(.+)$/m)?.[1];
+    return `${cwd}${path.sep}`.startsWith(`${dir}${path.sep}`) ? pid : null;
+  } catch {
+    return null; // nobody there, or not a process of ours to look at
+  }
+}
+
+// A stray has no window to type Ctrl-C in: its process is asked to end, and killed if
+// it is still there five seconds on.
+async function stopStray(wt) {
+  const pid = await listenerIn(wt.port, wt.dir);
+  if (!pid) return;
+  try {
+    process.kill(pid, "SIGTERM");
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      process.kill(pid, 0); // throws once it is gone
+    }
+    process.kill(pid, "SIGKILL");
   } catch {
     // it went by itself
   }
@@ -431,6 +464,8 @@ async function handle(req, url, send) {
     const root = findProject(url.searchParams.get("p"));
     const list = root ? worktrees(root) : [];
     const up = await Promise.all(list.map((w) => portOpen(w.port)));
+    // a server up with no dev window is not the hub's: the worktree's all the same, perhaps
+    const stray = await Promise.all(list.map((w, i) => (up[i] && w.devCommand && !w.devWindow ? listenerIn(w.port, w.dir) : null)));
     return send(200, "application/json", JSON.stringify({
       project: root && nameOf(root),
       // chats needing attention, so the page can flag projects it is not showing
@@ -438,7 +473,7 @@ async function handle(req, url, send) {
         name: nameOf(r),
         pending: (r === root ? list : worktrees(r)).filter((w) => ["waiting", "done"].includes(w.state)).length,
       })),
-      sessions: list.map((w, i) => ({ ...w, dev: up[i] })),
+      sessions: list.map((w, i) => ({ ...w, dev: up[i], devPid: stray[i] })),
     }));
   }
   if (req.method === "POST" && url.pathname === "/api/projects") {

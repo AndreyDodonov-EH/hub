@@ -46,7 +46,9 @@ its chats that are waiting or done.
   window of the worktree's session; ■ stops it with Ctrl-C, and closes the window on a
   server still there five seconds later. A new session does not start it unless
   `autostart` is set. Started on a worktree with no chat yet, it runs without one: the
-  agent starts when you open the row. A server the hub did not start has no button.
+  agent starts when you open the row. A server started some other way inside the
+  worktree (by the agent, say) gets ■ too, which ends its process; whatever else holds
+  the port has no button.
 - **Editor**: `<>` on a row opens the worktree in your editor (`editor` in `.hub.json`).
 - **Reconnect**: a terminal that loses the hub (a restart, the machine asleep) reattaches
   by itself once the hub answers. One whose session ended stays detached until you click

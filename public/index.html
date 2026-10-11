@@ -234,11 +234,12 @@ async function refresh() {
     const edit = row.querySelector(".edit");
     if (w.editor) press(edit, `open in ${w.editor}`, "/api/editor?");
     else edit.hidden = true;
-    // the hub's own dev server, in the session's dev window, is the one it can stop
+    // the hub can stop its own dev server, in the session's dev window, and one started
+    // some other way inside the worktree (by the agent, say)
     const dev = row.querySelector(".dev");
-    if (w.devWindow) {
+    if (w.devWindow || w.devPid) {
       dev.innerHTML = ICON.stop;
-      press(dev, w.dev ? "stop the dev server" : "dev server is starting — stop it", "/api/dev?stop&");
+      press(dev, !w.dev ? "dev server is starting — stop it" : w.devWindow ? "stop the dev server" : "stop the dev server (not started with ▶)", "/api/dev?stop&");
     } else if (w.devCommand && !w.dev) {
       dev.innerHTML = ICON.start;
       press(dev, "start the dev server", "/api/dev?");
