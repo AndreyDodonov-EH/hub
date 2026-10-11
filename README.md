@@ -22,6 +22,7 @@ npm link        # puts `hub` on your PATH
 
 ```
 cd your-project
+hub init        # adds the project to the hub (once)
 hub             # serves http://localhost:5190/?p=your-project, in the background
                 # (the next free port if 5190 is taken; it prints the address)
 hub stop        # stops the server; tmux sessions stay
@@ -30,11 +31,12 @@ hub --fg        # serve in the foreground instead
 
 The background server logs to `~/.config/hub/hub.log`.
 
-Run `hub` in another repository while one is running and it is added to the same
-server. Projects are remembered in `~/.config/hub/projects.json`. Each browser tab shows
-one project (`?p=<name>`); the links at the top of the sidebar switch (ctrl/middle-click
-opens a project in its own tab), and a badge on another project counts its chats that
-are waiting or done.
+A project is in the hub only once `hub init` (or `hub init <dir>`) has added it; a
+running server takes it at once. Plain `hub` adds nothing: it starts the server, or says
+where the running one is. Projects are remembered in `~/.config/hub/projects.json`. Each
+browser tab shows one project (`?p=<name>`); the links at the top of the sidebar switch
+(ctrl/middle-click opens a project in its own tab), and a badge on another project counts
+its chats that are waiting or done.
 
 - **Row colour**: one of four, keyed to the port (or git's worktree order without one).
 - **Row order**: drag a row to move it. The order is kept per project in

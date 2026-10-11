@@ -2,9 +2,9 @@
 // Hub: one browser page per project, listing its git worktrees, each with a terminal
 // attached to that worktree's tmux session (the coding agent runs inside it).
 //
-//   hub [dir]        register the project at dir (default: cwd); starts the server in
-//                    the background unless one is already running
-//   hub --fg [dir]   same, but serve in the foreground
+//   hub              start the server in the background, unless one is already running
+//   hub --fg         serve in the foreground instead
+//   hub init [dir]   add the project at dir (default: cwd); a running server takes it at once
 //   hub stop         stop the background server (tmux sessions stay)
 //
 //   HUB_PORT=5191        this port and no other (default: the first free one from 5190)
@@ -442,7 +442,9 @@ async function handle(req, url, send) {
     }));
   }
   if (req.method === "POST" && url.pathname === "/api/projects") {
-    const root = gitRoot((await body(req)).get("dir") ?? "");
+    // no dir: the CLI asking whether a hub is here (git would read "" as this process's own)
+    const dir = (await body(req)).get("dir");
+    const root = dir && gitRoot(dir);
     if (!root) return send(400, "text/plain", "not a git repository");
     addProject(root);
     return send(200, "text/plain", nameOf(root));
@@ -539,7 +541,6 @@ wss.on("connection", async (ws, req) => {
   const q = new URL(req.url, BASE).searchParams;
   const wt = allWorktrees().find((w) => w.session === q.get("s"));
   if (!wt) return ws.close(4004, "unknown session");
-if (root) addProject(root);
 
   const bare = wt.alive && isBare(wt);
   if (!wt.alive || bare) {
@@ -577,7 +578,7 @@ if (root) addProject(root);
 
 const args = process.argv.slice(2);
 const flags = new Set(args.filter((a) => a.startsWith("--")));
-const [arg] = args.filter((a) => !a.startsWith("--"));
+const [command, dir] = args.filter((a) => !a.startsWith("--"));
 const call = (route, params = {}) =>
   fetch(`${BASE}${route}`, { method: "POST", body: new URLSearchParams(params), signal: AbortSignal.timeout(500) }).catch(() => null);
 const pageUrl = (r) => `http://localhost:${PORT}/${r ? `?p=${encodeURIComponent(nameOf(r))}` : ""}`;
@@ -586,7 +587,7 @@ function printStatusHelp() {
   console.log(`Codex status is read automatically from its shared local daemon.\nWithout the daemon, restart Codex with\n  ${withCodexHooks("codex", BASE)} resume --last\nthen review and trust the Hub hooks in /hooks`);
 }
 
-if (arg === "stop") {
+if (command === "stop") {
   const res = await call("/api/stop");
   if (res && !res.ok) {
     // it answers but does not know /api/stop: an older hub, or not a hub at all
@@ -597,22 +598,51 @@ if (arg === "stop") {
   process.exit(0);
 }
 
-const root = gitRoot(path.resolve(arg ?? "."));
+if (command && command !== "init") {
+  console.error(`hub: unknown command \`${command}\` — hub [--fg] | hub init [dir] | hub stop`);
+  process.exit(1);
+}
 
-// A hub already on this port: hand it the project and leave.
-const running = await call("/api/projects", { dir: root ?? "" });
+// Is a hub on this port already? Sent without a dir, so it adds nothing.
+const ping = () => call("/api/projects");
+const running = await ping();
 if (running && !isHub(running)) {
   console.error(`hub: port ${PORT} is taken by something that is not this hub`);
   process.exit(1);
 }
+
+// Projects are added by `hub init` alone: to the running hub, or to the list the next reads.
+if (command === "init") {
+  const root = gitRoot(path.resolve(dir ?? "."));
+  if (!root) {
+    console.error(`hub: ${path.resolve(dir ?? ".")} is not in a git repository`);
+    process.exit(1);
+  }
+  const added = projects.includes(root) ? "is already added" : "added";
+  if (!running) addProject(root);
+  else if (!(await call("/api/projects", { dir: root }))?.ok) {
+    console.error(`hub: the running hub did not take ${root}`);
+    process.exit(1);
+  }
+  console.log(`hub: ${nameOf(root)} ${added} — ${running ? pageUrl(root) : "`hub` starts the server"}`);
+  process.exit(0);
+}
+
+// The page opens on the project hub is run in, if that one is added.
+const here = gitRoot(process.cwd());
+const root = projects.includes(here) ? here : projects[0];
+function printUrl(lead) {
+  console.log(`${lead}: ${pageUrl(root)}`);
+  if (here && here !== root) console.log(`${here} is not added — \`hub init\` adds it`);
+}
+
 if (running) {
-  if (!root) console.log(`hub is running: ${pageUrl()} (not in a git repository, nothing added)`);
-  else console.log(`hub is running: ${pageUrl(root)}`);
+  printUrl("hub is running");
   process.exit(0);
 }
 
 if (!projects.length) {
-  console.error("hub: run it inside a git repository (or pass one) to add the first project");
+  console.error("hub: no projects yet — run `hub init` inside a git repository to add the first");
   process.exit(1);
 }
 
@@ -620,13 +650,13 @@ if (!flags.has("--fg")) {
   // re-run detached, so the server outlives this terminal
   mkdirSync(CONFIG_DIR, { recursive: true });
   const log = openSync(LOG_FILE, "a");
-  spawn(process.execPath, [fileURLToPath(import.meta.url), "--fg", root ?? projects[0]], { detached: true, stdio: ["ignore", log, log] }).unref();
-  for (let i = 0; i < 50 && !(await call("/api/projects", { dir: "" })); i++) await new Promise((r) => setTimeout(r, 100));
-  if (!(await call("/api/projects", { dir: "" }))) {
+  spawn(process.execPath, [fileURLToPath(import.meta.url), "--fg"], { detached: true, stdio: ["ignore", log, log] }).unref();
+  for (let i = 0; i < 50 && !(await ping()); i++) await new Promise((r) => setTimeout(r, 100));
+  if (!(await ping())) {
     console.error(`hub: server did not start — see ${LOG_FILE}`);
     process.exit(1);
   }
-  console.log(`hub: ${pageUrl(root ?? projects[0])}`);
+  printUrl("hub");
   console.log(`running in the background (log: ${LOG_FILE}); \`hub stop\` ends it`);
   printStatusHelp();
   process.exit(0);
@@ -637,7 +667,7 @@ server.listen(PORT, "127.0.0.1", () => {
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(PORT_FILE, String(PORT));
   setInterval(() => codexRuntime.refresh(), 1500).unref();
-  console.log(`hub: ${pageUrl(root ?? projects[0])}`);
+  printUrl("hub");
   console.log(`projects: ${projects.map(nameOf).join(", ")}`);
   printStatusHelp();
 });
