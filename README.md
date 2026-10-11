@@ -64,8 +64,13 @@ are waiting or done.
   default that is `git worktree add ../<project>-<name>` on branch `<name>` (created
   from the main checkout's HEAD unless it exists); a project can substitute its own
   command (`worktree` below). The new row opens right away.
-- **Port link**: lit when something answers on the worktree's port. Clicking a dimmed
-  one starts the project's dev command in a second tmux window.
+- **Port link**: lit when something answers on the worktree's port.
+- **Dev server**: ▶ beside the port starts the project's dev command in a second tmux
+  window of the worktree's session; ■ stops it with Ctrl-C, and closes the window on a
+  server still there five seconds later. A new session does not start it unless
+  `autostart` is set. Started on a worktree with no chat yet, it runs without one: the
+  agent starts when you open the row. A server the hub did not start has no button.
+- **Editor**: `<>` on a row opens the worktree in your editor (`editor` below).
 - **Reconnect**: a terminal that loses the hub (a restart, the machine asleep) reattaches
   by itself once the hub answers. One whose session ended stays detached until you click
   it or its row, which starts a new session.
@@ -80,7 +85,9 @@ Optional `.hub.json` in the project's main checkout:
 ```json
 {
   "agent": "claude",
+  "editor": "code",
   "dev": "npm run dev",
+  "autostart": false,
   "port": { "file": ".dev-port", "default": 5199 },
   "url": "http://localhost:{port}/",
   "worktree": "tools/worktree-create.sh {name}"
@@ -90,7 +97,9 @@ Optional `.hub.json` in the project's main checkout:
 | key | default | meaning |
 | --- | --- | --- |
 | `agent` | `"claude"` | command a new session starts |
+| `editor` | `"code"` | command behind a row's editor button, run in the worktree with its path as the last argument; `""` for no button |
 | `dev` | none | dev-server command, run in the worktree |
+| `autostart` | `false` | start the dev server along with each new session |
 | `port.file` | none | file in each worktree holding its port number |
 | `port.default` | none | port for worktrees without that file |
 | `url` | `http://localhost:{port}/` | what the port link opens; `{port}` and `{branch}` are filled in, URL-encoded (so `{branch}` suits a path segment or query value, not a hostname); must be `http(s)` |

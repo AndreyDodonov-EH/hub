@@ -14,12 +14,12 @@
 //
 // Sessions live on a private tmux server (socket `hub`), so they survive the page and
 // the hub itself; from any terminal: `tmux -L hub attach -t <session>`.
-// Each session has the chat window and, if the project has a dev command, a `dev` one.
+// Each session has the chat window and, while its dev server runs, a `dev` one.
 //
 // Per-project settings come from an optional `.hub.json` in the project root — see README.
 import { createServer } from "node:http";
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, closeSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
@@ -41,7 +41,7 @@ const ORDER_FILE = path.join(CONFIG_DIR, "order.json");
 const PORT_FILE = path.join(CONFIG_DIR, "port");
 const LOG_FILE = path.join(CONFIG_DIR, "hub.log");
 const STATES = ["idle", "working", "background", "waiting", "done", "off"];
-const DEFAULTS = { agent: "claude", dev: null, port: null, url: "http://localhost:{port}/", worktree: null };
+const DEFAULTS = { agent: "claude", dev: null, autostart: false, editor: "code", port: null, url: "http://localhost:{port}/", worktree: null };
 
 // ---- port -------------------------------------------------------------------
 
@@ -283,17 +283,54 @@ function linkUrl(template, values) {
   }
 }
 
+// session → its dev window, by id: a name can come back as another window, an id never
+function devWindows() {
+  try {
+    const rows = tmux("list-windows", "-a", "-f", "#{&&:#{==:#{window_name},dev},#{!=:#{window_index},0}}", "-F", "#{session_name}\t#{window_id}");
+    return new Map(rows.split("\n").filter(Boolean).map((r) => r.split("\t")));
+  } catch {
+    return new Map(); // no server yet
+  }
+}
+
 // The dev command in a second window; it closes by itself if the server exits.
 function startDev(wt) {
-  if (!wt.devCommand) return;
-  const windows = tmux("list-windows", "-t", `=${wt.session}`, "-F", "#{window_name}").split("\n");
-  if (!windows.includes("dev")) tmux("new-window", "-d", "-t", `=${wt.session}:`, "-n", "dev", "-c", wt.dir, wt.devCommand);
+  if (!wt.devCommand || devWindows().has(wt.session)) return;
+  tmux("new-window", "-d", "-t", `=${wt.session}:`, "-n", "dev", "-c", wt.dir, wt.devCommand);
+}
+
+// Ctrl-C, as you would type it, which a server takes as the cue to shut down; one still
+// there five seconds on has its window closed under it.
+async function stopDev(wt) {
+  if (!wt.devWindow) return;
+  try {
+    tmux("send-keys", "-t", wt.devWindow, "C-c");
+    for (let i = 0; i < 50 && devWindows().get(wt.session) === wt.devWindow; i++) await new Promise((r) => setTimeout(r, 100));
+    tmux("kill-window", "-t", wt.devWindow);
+  } catch {
+    // it went by itself
+  }
+}
+
+// A session with no agent in it, for a dev server started before any terminal came:
+// `@bare` has the first terminal start the agent then.
+function bareSession(wt) {
+  tmux("new-session", "-d", "-s", wt.session, "-c", wt.dir, ";", "set-option", "-t", `=${wt.session}:`, "@bare", "1");
+}
+
+function isBare(wt) {
+  try {
+    return tmux("show-options", "-qv", "-t", `=${wt.session}:`, "@bare").trim() === "1";
+  } catch {
+    return false; // the session ended meanwhile
+  }
 }
 
 function worktrees(root) {
   const cfg = config(root);
   const out = execFileSync("git", ["-C", root, "worktree", "list", "--porcelain"], { encoding: "utf8" });
   const live = liveSessions();
+  const devs = devWindows();
   const list = out.trim().split("\n\n").map((block, index) => {
     const dir = block.match(/^worktree (.+)$/m)[1];
     const branch = block.match(/^branch refs\/heads\/(.+)$/m)?.[1] ?? "(detached)";
@@ -314,6 +351,7 @@ function worktrees(root) {
       url: port && linkUrl(cfg.url, { port, branch }),
       state: (alive && (status.get(session) ?? (running && "unknown"))) || "off",
       agent: cfg.agent, devCommand: cfg.port ? cfg.dev : null, // no port config, no dev server
+      devWindow: devs.get(session), autostart: Boolean(cfg.autostart), editor: cfg.editor,
     };
   });
   // the saved order first; worktrees it does not know (new ones) follow in git's order
@@ -335,6 +373,22 @@ const codexRuntime = new CodexRuntime({
 });
 
 const run = promisify(execFile);
+
+// The project's editor on a worktree, its path as the last argument, left to run on its
+// own. A command that fails does so at once (not installed, say), and what it said goes
+// back to the page.
+const EDITOR_LOG = path.join(tmpdir(), `hub-${PORT}-editor.log`);
+function openEditor(wt) {
+  return new Promise((resolve, reject) => {
+    const log = openSync(EDITOR_LOG, "w"); // a file, not a pipe: it outlives the hub
+    const child = spawn("sh", ["-c", `${wt.editor} "$1"`, "sh", wt.dir], { cwd: wt.dir, detached: true, stdio: ["ignore", "ignore", log] });
+    closeSync(log);
+    child.unref();
+    child.once("error", reject);
+    child.once("exit", (code) => (code ? reject(new Error(readFileSync(EDITOR_LOG, "utf8").trim() || `${wt.editor}: exit status ${code}`)) : resolve()));
+    setTimeout(resolve, 1000); // still running: the editor itself rather than a launcher
+  });
+}
 
 // A new worktree: the project's own `worktree` command if it has one, else a sibling
 // directory <project>-<name> on branch <name> (created from the main checkout's HEAD
@@ -437,9 +491,24 @@ async function handle(req, url, send) {
   }
   if (req.method === "POST" && url.pathname === "/api/dev") {
     const wt = allWorktrees().find((w) => w.session === url.searchParams.get("s"));
-    if (!wt?.alive) return send(400, "text/plain", "no session");
-    if (!(await portOpen(wt.port))) startDev(wt);
+    if (!wt?.devCommand) return send(400, "text/plain", "no dev command");
+    if (url.searchParams.has("stop")) {
+      await stopDev(wt);
+    } else if (!(await portOpen(wt.port))) {
+      if (!wt.alive) bareSession(wt);
+      startDev(wt);
+    }
     return send(200, "text/plain", "ok");
+  }
+  if (req.method === "POST" && url.pathname === "/api/editor") {
+    const wt = allWorktrees().find((w) => w.session === url.searchParams.get("s"));
+    if (!wt?.editor) return send(400, "text/plain", "no editor");
+    try {
+      await openEditor(wt);
+      return send(200, "text/plain", "ok");
+    } catch (e) {
+      return send(400, "text/plain", e.message);
+    }
   }
   const hit = STATIC[url.pathname];
   if (!hit) return send(404, "text/plain", "not found");
@@ -470,15 +539,18 @@ wss.on("connection", async (ws, req) => {
   const q = new URL(req.url, BASE).searchParams;
   const wt = allWorktrees().find((w) => w.session === q.get("s"));
   if (!wt) return ws.close(4004, "unknown session");
+if (root) addProject(root);
 
-  if (!wt.alive) {
+  const bare = wt.alive && isBare(wt);
+  if (!wt.alive || bare) {
     // a page coming back from a dropped connection reattaches; a new session takes a click
     if (q.has("again")) return ws.close(4000, "session ended");
-    tmux("new-session", "-d", "-s", wt.session, "-c", wt.dir);
+    if (bare) tmux("set-option", "-u", "-t", `=${wt.session}:`, "@bare");
+    else tmux("new-session", "-d", "-s", wt.session, "-c", wt.dir);
     // typed into a shell, so the session outlives the agent exiting
     const cmd = launchCommand(wt);
-    if (cmd) tmux("send-keys", "-t", `=${wt.session}:`, cmd, "Enter");
-    if (!(await portOpen(wt.port))) startDev(wt);
+    if (cmd) tmux("send-keys", "-t", `=${wt.session}:0`, cmd, "Enter");
+    if (!bare && wt.autostart && !(await portOpen(wt.port))) startDev(wt);
   }
   const env = { ...process.env, TERM: "xterm-256color" };
   delete env.TMUX;
@@ -539,7 +611,6 @@ if (running) {
   process.exit(0);
 }
 
-if (root) addProject(root);
 if (!projects.length) {
   console.error("hub: run it inside a git repository (or pass one) to add the first project");
   process.exit(1);
