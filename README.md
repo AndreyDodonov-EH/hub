@@ -2,21 +2,28 @@
 
 One browser page for all your coding-agent chats.
 
+![The hub page: a project's worktrees in the sidebar, the agent chat of one of them in the terminal](docs/screenshot.png)
+
+<img src="docs/sidebar.png" width="850" alt="The sidebar: projects at the top, one row per git worktree with the agent's status, an editor button, a dev-server button and the port link, and New worktree under the list">
+
 A sidebar lists the git worktrees of a project; each row shows its branch, the agent's
 status and a link to its dev server. Clicking a row attaches a real terminal to that
-worktree's tmux session, where the agent runs. Sessions survive closing the page and
-the hub itself.
+worktree's tmux session, where the agent (Claude Code or Codex) runs. Sessions survive
+closing the page and the hub itself.
 
 Local only: Linux, macOS, WSL. No hosting, no remote sessions.
 
 ## Install
 
-Needs Node 20+, tmux 3.2+, git, curl, and a C++ toolchain (`node-pty` compiles on install).
+```
+curl -fsSL https://raw.githubusercontent.com/AndreyDodonov-EH/hub/main/install.sh | bash
+```
 
-```
-npm install
-npm link        # puts `hub` on your PATH
-```
+Needs Node 20+, tmux 3.2+, git and curl; on Linux and WSL also a C++ toolchain
+(`node-pty` compiles on install). The script clones the hub into `~/.local/share/hub`
+and links `hub` into `~/.local/bin`. Run it again to update.
+
+From a checkout instead: `npm install && npm link`.
 
 ## Use
 
@@ -29,56 +36,19 @@ hub stop        # stops the server; tmux sessions stay
 hub --fg        # serve in the foreground instead
 ```
 
-The background server logs to `~/.config/hub/hub.log`.
+`hub init <dir>` adds a project from anywhere. The background server logs to
+`~/.config/hub/hub.log`.
 
-A project is in the hub only once `hub init` (or `hub init <dir>`) has added it; a
-running server takes it at once. Plain `hub` adds nothing: it starts the server, or says
-where the running one is. Projects are remembered in `~/.config/hub/projects.json`. Each
-browser tab shows one project (`?p=<name>`); the links at the top of the sidebar switch
-(ctrl/middle-click opens a project in its own tab), and a badge on another project counts
-its chats that are waiting or done.
+In the page:
 
-- **Row colour**: one of four, keyed to the port (or git's worktree order without one).
-- **Row order**: drag a row to move it. The order is kept per project in
-  `~/.config/hub/order.json`; new worktrees go to the end.
-- **Status**: idle / working / background tasks / needs you / done, with browser
-  notifications for the last two on chats you are not looking at. "Background tasks" is
-  a turn that ended with shells, subagents or scheduled wakeups still pending; it turns
-  to done, with its notification, once a turn ends with none left. "Needs you" goes
-  when you answer in the page, which no hook reports: Enter or a shortcut key allows
-  (working), Esc refuses (idle). A question reports its own answer; one given outside
-  the page (`tmux attach`) shows once the tool has run. Claude Code reports all of them through
-  hooks the hub injects at launch (`claude --settings`). Codex CLI also reports idle,
-  working, needs you, done, interruption and exit through injected lifecycle hooks.
-  For Codex using its shared local daemon, Hub also reads runtime status directly:
-  existing sessions show idle, working or needs you without restarting Codex or
-  configuring hooks. A completed turn stays done until viewed. Once Codex reports
-  through hooks, they speak for it instead of the daemon. A status belongs to the agent
-  that reported it: it is dropped when the pane is back at its shell or runs another
-  agent, so a killed agent leaves nothing behind. Codex without the
-  shared daemon needs the injected hooks, reviewed and trusted once in `/hooks`.
-  Other agents only show running / not running. Claude started outside the hub needs
-  to be restarted with the command the hub prints at startup for detailed status.
-- **Resume**: a session started for a worktree that already has a Claude Code chat
-  continues the latest one (`claude --continue`); `/clear` or `/resume` inside it for
-  another. Set `agent` to `claude --resume` to pick from the list each time instead.
-- **New worktree**: *+ New worktree* under the list, then type a name. By
-  default that is `git worktree add ../<project>-<name>` on branch `<name>` (created
-  from the main checkout's HEAD unless it exists); a project can substitute its own
-  command (`worktree` below). The new row opens right away.
-- **Port link**: lit when something answers on the worktree's port.
-- **Dev server**: ▶ beside the port starts the project's dev command in a second tmux
-  window of the worktree's session; ■ stops it with Ctrl-C, and closes the window on a
-  server still there five seconds later. A new session does not start it unless
-  `autostart` is set. Started on a worktree with no chat yet, it runs without one: the
-  agent starts when you open the row. A server the hub did not start has no button.
-- **Editor**: `<>` on a row opens the worktree in your editor (`editor` below).
-- **Reconnect**: a terminal that loses the hub (a restart, the machine asleep) reattaches
-  by itself once the hub answers. One whose session ended stays detached until you click
-  it or its row, which starts a new session.
-- **Clipboard**: a plain drag copies on release; shift+drag then right-click copies
-  too; Ctrl+V pastes.
+- **Status** is reported by Claude Code and Codex CLI, through hooks the hub injects at
+  launch. Other agents show running / not running.
+- **Resume**: a new session continues the worktree's latest Claude Code chat.
+- **Row order**: drag a row to move it.
+- **Clipboard**: a plain drag copies on release; Ctrl+V pastes.
 - **From a terminal**: `tmux -L hub attach -t <session>`.
+
+The rest is in [docs/details.md](docs/details.md).
 
 ## Project config
 
@@ -109,18 +79,8 @@ Optional `.hub.json` in the project's main checkout:
 
 Without `port`, rows have no link and no dev server.
 
-To start Codex instead, set `"agent": "codex"` (or `"codex resume --last"` to
-resume the latest chat in each worktree) in `.hub.json`, or launch Hub with
-`HUB_CMD=codex hub`. Use a Codex CLI version with lifecycle hooks and inline
-`hooks` configuration (verified with 0.160.0). For hook-based reporting without
-the shared daemon, use `/hooks` to review and trust the Hub status hooks. Hub supplies them only to that
-invocation; it does not edit your Codex configuration. When the shared local daemon
-is available, existing Codex panes are detected automatically through its read-only
-`thread/loaded/list` and `thread/read` metadata, including fresh chats before their
-first prompt. The same sidebar states,
-project badges and browser notifications work for both agents. Codex reports
-done at the end of a turn; its hooks do not report pending background tasks.
-See the [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks).
+To start Codex instead, set `"agent": "codex"` (or `"codex resume --last"`); see
+[Codex](docs/details.md#codex).
 
 ## Environment
 
@@ -131,21 +91,7 @@ See the [Codex hooks documentation](https://learn.chatgpt.com/docs/hooks).
 | `HUB_CONFIG_DIR` | `~/.config/hub` | where the project list, row order and port live |
 | `HUB_CMD` | — | overrides `agent` for new sessions; empty = bare shell |
 
-The hub writes its port to `~/.config/hub/port`. `hub` and `hub stop` look for the
-server there, so they find it without `HUB_PORT`, and the next start takes the same
-port again if it is free, whatever chose it: bookmarks, the notification permission
-and the status hooks of chats already running all hang on the address. If the hub
-does have to move, restart those chats for their status to show. `HUB_PORT=5190 hub`
-once moves it back.
-
 ## Security
 
 The page is a shell. The server binds to 127.0.0.1 and refuses requests from any
 other web origin, but another user account on the same machine can reach the port.
-
-## Not yet
-
-- Status hooks for agents other than Claude Code and Codex CLI.
-- Configurable row metadata.
-- Viewing the `dev` window's output from the page.
-- An image viewer route agents can link to.
