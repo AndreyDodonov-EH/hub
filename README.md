@@ -95,3 +95,7 @@ To start Codex instead, set `"agent": "codex"` (or `"codex resume --last"`); see
 
 The page is a shell. The server binds to 127.0.0.1 and refuses requests from any
 other web origin, but another user account on the same machine can reach the port.
+
+## License
+
+[MIT](LICENSE).

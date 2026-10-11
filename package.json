@@ -2,6 +2,7 @@
   "name": "hub",
   "version": "0.1.0",
   "description": "One browser page for all your coding-agent chats: a sidebar of git worktrees, each with its tmux-backed terminal, status and dev-server link.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "hub": "hub.mjs"
