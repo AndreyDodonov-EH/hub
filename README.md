@@ -21,7 +21,8 @@ curl -fsSL https://raw.githubusercontent.com/AndreyDodonov-EH/hub/main/install.s
 
 Needs Node 20+, tmux 3.2+, git and curl; on Linux and WSL also a C++ toolchain
 (`node-pty` compiles on install). The script clones the hub into `~/.local/share/hub`
-and links `hub` into `~/.local/bin`. Run it again to update.
+and links `hub` into `~/.local/bin`. `hub update` brings it to the newest version;
+so does running the script again.
 
 From a checkout instead: `npm install && npm link`.
 
@@ -34,10 +35,12 @@ hub             # serves http://localhost:5190/?p=your-project, in the backgroun
                 # (the next free port if 5190 is taken; it prints the address)
 hub stop        # stops the server; tmux sessions stay
 hub --fg        # serve in the foreground instead
+hub update      # the newest hub: pulls its checkout, installs what that needs
 ```
 
 `hub init <dir>` adds a project from anywhere. The background server logs to
-`~/.config/hub/hub.log`.
+`~/.config/hub/hub.log`. After `hub update` a running server keeps the old code until
+`hub stop` and `hub`.
 
 In the page:
 

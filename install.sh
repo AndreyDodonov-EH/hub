@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/AndreyDodonov-EH/hub/main/install.sh | bash
 #
 # Clones the hub, installs its dependencies there and links `hub` onto your PATH.
-# Run it again to update.
+# Run it again to update, or run `hub update`.
 #
 #   HUB_HOME=...   where the checkout goes (default ~/.local/share/hub)
 #   HUB_BIN=...    where the `hub` link goes (default ~/.local/bin)
@@ -48,7 +48,8 @@ main() {
   fi
 
   say "installing dependencies"
-  (cd "$DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error) ||
+  # --no-save: package-lock.json stays as git has it, or the next pull would stop at it
+  (cd "$DIR" && npm install --omit=dev --no-save --no-audit --no-fund --loglevel=error) ||
     die "npm install failed — on Linux node-pty compiles, which takes a C++ toolchain (Debian/Ubuntu: build-essential and python3)"
 
   mkdir -p "$BIN"

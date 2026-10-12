@@ -6,6 +6,7 @@
 //   hub --fg         serve in the foreground instead
 //   hub init [dir]   add the project at dir (default: cwd); a running server takes it at once
 //   hub stop         stop the background server (tmux sessions stay)
+//   hub update       bring the hub itself to its newest version
 //
 //   HUB_PORT=5191        this port and no other (default: the first free one from 5190)
 //   HUB_SOCKET=hubtest   another tmux server (keeps tests off the real sessions)
@@ -633,13 +634,42 @@ if (command === "stop") {
   process.exit(0);
 }
 
+// Is a hub on this port already? Sent without a dir, so it adds nothing.
+const ping = () => call("/api/projects");
+
+// The checkout the hub runs from, moved to the newest commit of its remote, then the
+// dependencies that commit asks for: what running install.sh again does. `--no-save`
+// keeps npm from rewriting package-lock.json, which would stand in the next pull's way.
+if (command === "update") {
+  const fail = (message) => {
+    console.error(`hub: ${message}`);
+    process.exit(1);
+  };
+  const git = (...args) => execFileSync("git", ["-C", HERE, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }).trim();
+  if (!existsSync(path.join(HERE, ".git"))) fail(`${HERE} is not a git checkout — install the hub again, as the README says`);
+  console.log(`hub: updating ${HERE}`);
+  const before = git("rev-parse", "--short", "HEAD");
+  try {
+    git("pull", "--quiet", "--ff-only");
+  } catch {
+    fail(`git could not update ${HERE} (its message is above) — bring it up to date by hand`);
+  }
+  const after = git("rev-parse", "--short", "HEAD");
+  try {
+    execFileSync("npm", ["install", "--omit=dev", "--no-save", "--no-audit", "--no-fund", "--loglevel=error"], { cwd: HERE, stdio: ["ignore", "ignore", "inherit"] });
+  } catch {
+    fail(`the code is at ${after}, its dependencies are not: \`npm install\` failed in ${HERE}`);
+  }
+  if (before === after) console.log(`hub: already the newest (${after})`);
+  else console.log(`hub: updated ${before} → ${after}${isHub(await ping()) ? " — the running server keeps the old code until `hub stop` and `hub`" : ""}`);
+  process.exit(0);
+}
+
 if (command && command !== "init") {
-  console.error(`hub: unknown command \`${command}\` — hub [--fg] | hub init [dir] | hub stop`);
+  console.error(`hub: unknown command \`${command}\` — hub [--fg] | hub init [dir] | hub stop | hub update`);
   process.exit(1);
 }
 
-// Is a hub on this port already? Sent without a dir, so it adds nothing.
-const ping = () => call("/api/projects");
 const running = await ping();
 if (running && !isHub(running)) {
   console.error(`hub: port ${PORT} is taken by something that is not this hub`);
